@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import TelegramBot from 'node-telegram-bot-api';
 import { AgentService } from 'src/agents/agent.service';
+import { RedisService } from 'src/redis/redis.service';
 
 @Injectable()
 export class BotService implements OnModuleInit {
@@ -8,10 +9,12 @@ export class BotService implements OnModuleInit {
   private bot: TelegramBot;
   private readonly MAX_RETRIES = 3;
   private readonly RETRY_DELAY = 2000; // 2 seconds
+  private readonly TRANSACTION_TTL = 300; // 5 minutos em segundos
 
   constructor(
     @Inject("BOT_TOKEN") private readonly BOT_TOKEN: string,
     @Inject() private readonly agentService: AgentService,
+    @Inject() private readonly redisService: RedisService,
   ) {}
 
   async onModuleInit() {
@@ -102,6 +105,175 @@ export class BotService implements OnModuleInit {
         this.logger.error(`Erro ao processar comando /receba no chat ${chatId}`, error);
       }
     });
+
+    // Aprova a transação encontrada para este chat e chama this.sendMoney()
+    this.onCommand('sim', async (msg) => {
+      const chatId = msg.chat.id;
+
+      try {
+        const key = await this.findLatestTransactionKey(chatId);
+        if (!key) {
+          await this.sendMessage(chatId, 'Nenhuma transação gerada nos últimos 5 minutos, tente pedir para ele gerar transação');
+          return;
+        }
+
+        const transactionData = await this.redisService.get<any>(key);
+        if (!transactionData) {
+          await this.sendMessage(chatId, 'Nenhuma transação gerada nos últimos 5 minutos, tente pedir para ele gerar transação');
+          return;
+        }
+
+        this.logger.log(`Aprovando transação a partir da chave ${key}`);
+        // Chama a função responsável por enviar o dinheiro (não implementar aqui)
+        await this.sendMessage(chatId, '✅ Transação aprovada. Iniciando processo de envio...');
+        await this.sendMoney();
+
+        // Remove a transação do cache após aprovação
+        await this.redisService.delete(key);
+        await this.sendMessage(chatId, '✅ Transação processada e removida do cache.');
+      } catch (error) {
+        this.logger.error(`Erro ao processar comando /sim no chat ${chatId}`, error);
+        await this.sendMessage(chatId, '❌ Erro ao aprovar transação. Tente novamente.').catch(() => {
+          this.logger.error('Falha ao enviar mensagem de erro para o usuário');
+        });
+      }
+    });
+
+    // Recusa a transação e remove do redis
+    this.onCommand('não', async (msg) => {
+      const chatId = msg.chat.id;
+
+      try {
+        const key = await this.findLatestTransactionKey(chatId);
+        if (!key) {
+          await this.sendMessage(chatId, 'Nenhuma transação gerada nos últimos 5 minutos, tente pedir para ele gerar transação');
+          return;
+        }
+
+        await this.redisService.delete(key);
+        await this.sendMessage(chatId, '❌ Transação recusada e removida do cache.');
+      } catch (error) {
+        this.logger.error(`Erro ao processar comando /não no chat ${chatId}`, error);
+        await this.sendMessage(chatId, '❌ Erro ao recusar transação. Tente novamente.').catch(() => {
+          this.logger.error('Falha ao enviar mensagem de erro para o usuário');
+        });
+      }
+    });
+
+    // Edita a transação: anexa o texto passado após o comando e pede para a IA gerar um novo resumo
+    this.onCommand('editar', async (msg) => {
+      const chatId = msg.chat.id;
+      const rawText = msg.text || '';
+      const editText = rawText.replace(/^\/editar\b\s*/i, '').trim();
+
+      if (!editText) {
+        await this.sendMessage(chatId, 'Por favor informe o que deseja editar após o comando, ex: /editar alterar descrição');
+        return;
+      }
+
+      try {
+        const key = await this.findLatestTransactionKey(chatId);
+        if (!key) {
+          await this.sendMessage(chatId, 'Nenhuma transação gerada nos últimos 5 minutos, tente pedir para ele gerar transação');
+          return;
+        }
+
+        const transactionData = await this.redisService.get<any>(key);
+        if (!transactionData) {
+          await this.sendMessage(chatId, 'Nenhuma transação gerada nos últimos 5 minutos, tente pedir para ele gerar transação');
+          return;
+        }
+
+        const originalTransaction = transactionData.transaction;
+
+        // Cria uma versão editada da transação anexando o pedido do usuário
+        const modifiedTransaction = {
+          ...originalTransaction,
+          description: `${originalTransaction.description || ''} (edição: ${editText})`,
+        };
+
+        const newTransactionData = {
+          ...transactionData,
+          transaction: modifiedTransaction,
+          createdAt: new Date().toISOString(),
+        };
+
+        // Salva a transação editada no mesmo key e renova o TTL
+        await this.redisService.set(key, newTransactionData, this.TRANSACTION_TTL);
+
+        // Gera e envia novo resumo usando a IA
+        const transaction = await this.agentService.analyzeMessage(`
+          Houve um erro nos dados da transação anterior. Por favor, considere essa nova versão ao gerar o resumo.
+          ${JSON.stringify(modifiedTransaction)} 
+        `, []);
+        
+        if (!transaction) {
+          await this.sendMessage(chatId, '❌ Erro ao editar transação com IA. Tente novamente.').catch(() => {
+            this.logger.error('Falha ao enviar mensagem de erro para o usuário');
+          });
+          return;
+        }
+
+        const summary = await this.agentService.generateTransactionSummaryWithData(transaction);
+        await this.sendMessage(chatId, `✏️ Transação editada:\n${summary}`);
+      } catch (error) {
+        this.logger.error(`Erro ao processar comando /editar no chat ${chatId}`, error);
+        await this.sendMessage(chatId, '❌ Erro ao editar transação. Tente novamente.').catch(() => {
+          this.logger.error('Falha ao enviar mensagem de erro para o usuário');
+        });
+      }
+    });
+  }
+
+  /**
+   * Busca a última chave de transação para um chat específico.
+   * Retorna a chave mais recente (com base em createdAt) ou null se não existir.
+   */
+  private async findLatestTransactionKey(chatId: number | string): Promise<string | null> {
+    try {
+      const pattern = `transaction:${chatId}:*`;
+      const keys = await this.redisService.keys(pattern);
+
+      if (!keys || keys.length === 0) {
+        return null;
+      }
+
+      // Recupera todos os valores para decidir qual é o mais recente
+      let latestKey: string | null = null;
+      let latestTime = 0;
+
+      for (const k of keys) {
+        try {
+          const data = await this.redisService.get<any>(k);
+          if (data && data.createdAt) {
+            const t = new Date(data.createdAt).getTime();
+            if (t > latestTime) {
+              latestTime = t;
+              latestKey = k;
+            }
+          } else {
+            // Fallback: tenta extrair timestamp do nome da chave
+            const parts = k.split(':');
+            const candidate = Number(parts[parts.length - 1]);
+            if (!isNaN(candidate) && candidate > latestTime) {
+              latestTime = candidate;
+              latestKey = k;
+            }
+          }
+        } catch (err) {
+          this.logger.warn(`Falha ao obter dados para chave Redis '${k}': ${err}`);
+        }
+      }
+
+      return latestKey;
+    } catch (error) {
+      this.logger.error('Erro ao buscar chaves de transação no Redis', error);
+      return null;
+    }
+  }
+
+  async sendMoney(): Promise<void> {
+    // NÃO IMPLEMENTAR ESSA FUNÇÃO
   }
 
   async listenAndValidateMessages(): Promise<void> {
@@ -125,10 +297,22 @@ export class BotService implements OnModuleInit {
               this.logger.log(`Transação detectada: ${JSON.stringify(transaction)}`);
               
               try {
+                // Salva os dados da transação no Redis com TTL de 5 minutos
+                const requesterId = msg.from?.id || 0;
+                const transactionKey = `transaction:${chatId}:${Date.now()}`;
+                const transactionData = {
+                  type: 'transaction',
+                  chatId: chatId,
+                  requester: requesterId,
+                  transaction: transaction,
+                  createdAt: new Date().toISOString(),
+                };
+
+                await this.redisService.set(transactionKey, transactionData, this.TRANSACTION_TTL);
+                this.logger.log(`Transação salva no Redis com chave: ${transactionKey}`);
 
                 const summary = await this.agentService.generateTransactionSummaryWithData(transaction);
                 await this.sendMessage(chatId, summary);
-                // ! IMPLEMENTAR LÓGICA DE PROCESSAMENTO DA TRANSAÇÃO
 
               } catch (summaryError) {
 

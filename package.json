@@ -26,6 +26,7 @@
     "@nestjs/platform-express": "^11.0.1",
     "node-telegram-bot-api": "^0.66.0",
     "openai": "^6.8.1",
+    "redis": "^5.9.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
@@ -39,6 +40,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",
     "@types/node-telegram-bot-api": "^0.64.12",
+    "@types/redis": "^4.0.10",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",

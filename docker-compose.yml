@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: accountant-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: accountant
+      POSTGRES_PASSWORD: accountant123
+      POSTGRES_DB: accountant_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accountant"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - accountant-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: accountant-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - accountant-network
+
+  # backend:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: accountant-backend
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     # Node environment
+  #     NODE_ENV: production
+  #     PORT: 3000
+      
+  #     # Database configuration
+  #     DATABASE_HOST: postgres
+  #     DATABASE_PORT: 5432
+  #     DATABASE_USER: accountant
+  #     DATABASE_PASSWORD: accountant123
+  #     DATABASE_NAME: accountant_db
+      
+  #     # Redis configuration
+  #     REDIS_HOST: redis
+  #     REDIS_PORT: 6379
+      
+  #     # Add your other environment variables here
+  #     # TELEGRAM_BOT_TOKEN: your_token_here
+  #     # OPENAI_API_KEY: your_key_here
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - accountant-network
+  #   volumes:
+  #     # For development, you can uncomment this to enable hot reload
+  #     # - ./src:/app/src
+  #     # - ./node_modules:/app/node_modules
+  #     - /app/node_modules
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  accountant-network:
+    driver: bridge
