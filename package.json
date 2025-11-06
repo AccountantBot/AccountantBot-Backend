@@ -28,6 +28,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "dotenv": "^17.2.3",
+    "ethers": "^6.15.0",
     "node-telegram-bot-api": "^0.66.0",
     "openai": "^6.8.1",
     "prisma": "^6.19.0",
@@ -69,6 +70,9 @@
       "ts"
     ],
     "rootDir": "src",
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/$1"
+    },
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
