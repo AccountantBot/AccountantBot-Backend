@@ -132,8 +132,47 @@ export class BotService implements OnModuleInit {
         await this.sendMessage(chatId, '✅ Transação aprovada. Iniciando processo de envio...');
         await this.sendMoney();
 
+        // Insere a transação no histórico após o envio
+        try {
+          const transaction = transactionData.transaction;
+          const pubkeys = transactionData.pubkeys || [];
+
+          // Busca a pubkey do payer
+          const payerPubkey = transactionData.requesterPubkey;
+
+          console.log(transactionData)
+          
+          transaction.participants = transaction.participants.filter((handle: string) => handle !== transactionData.requester);
+
+          if (payerPubkey && transaction.participants && transaction.participants.length > 0) {
+            await this.accountService.createTransactionHistory({
+              payer: transactionData.requesterPubkey,
+              token: transaction.token || '0x0000000000000000000000000000000000000000', // Token padrão se não especificado
+              totalAmount: transaction.totalAmount?.toString() || '0',
+              participants: transaction.participants.map((handle: string) => {
+                const participantPubkey = pubkeys.find(p => p.telegramHandle === handle)?.pubkey;
+                return {
+                  pubkey: participantPubkey,
+                  amount: (parseFloat(transaction.totalAmount || '0') / transaction.participants.length).toString(),
+                };
+              }),
+              chainId: transaction.chainId || 1,
+              contract: "",
+              deadline: new Date(),
+            });
+
+            this.logger.log('Transação inserida no histórico com sucesso');
+          } else {
+            this.logger.warn('Não foi possível inserir no histórico: dados incompletos');
+          }
+        } catch (historyError) {
+          this.logger.error('Erro ao inserir transação no histórico', historyError);
+          // Não bloqueia o fluxo se falhar ao inserir no histórico
+        }
+
         // Remove a transação do cache após aprovação
-        // await this.redisService.delete(key);
+        await this.redisService.delete(key);
+        
         await this.sendMessage(chatId, '✅ Transação processada e removida do cache.');
       } catch (error) {
         this.logger.error(`Erro ao processar comando /sim no chat ${chatId}`, error);
@@ -302,22 +341,37 @@ export class BotService implements OnModuleInit {
               
               try {
                 // Busca as pubkeys dos participantes da transação
+                const requesterId = msg.from?.username || "";
+                if (!requesterId) {
+                  await this.sendMessage(chatId, '❌ Não foi possível identificar seu username. Por favor, configure um username no Telegram e tente novamente.')
+                  return;
+                }
                 const participantHandles = transaction.participants || [];
                 const pubkeysData = await this.accountService.getPubkeysByTelegramHandles(participantHandles);
+                const requesterPubkey = await this.accountService.getPubkeysByTelegramHandles([requesterId]);
                 
                 this.logger.log(`Pubkeys obtidas: ${JSON.stringify(pubkeysData)}`);
 
                 // Salva os dados da transação no Redis com TTL de 5 minutos
-                const requesterId = msg.from?.id || 0;
                 const transactionKey = `transaction:${chatId}:${Date.now()}`;
                 const transactionData = {
                   type: 'transaction',
                   chatId: chatId,
                   requester: requesterId,
+                  requesterPubkey: requesterPubkey[0].pubkey,
                   transaction: transaction,
                   pubkeys: pubkeysData,
                   createdAt: new Date().toISOString(),
                 };
+                console.log({
+                  type: 'transaction',
+                  chatId: chatId,
+                  requester: requesterId,
+                  requesterPubkey: requesterPubkey[0].pubkey,
+                  transaction: transaction,
+                  pubkeys: pubkeysData,
+                  createdAt: new Date().toISOString(),
+                })
 
                 await this.redisService.set(transactionKey, transactionData, this.TRANSACTION_TTL);
                 this.logger.log(`Transação salva no Redis com chave: ${transactionKey}`);
