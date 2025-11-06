@@ -5,6 +5,8 @@ import { AppService } from './app.service';
 import { BotModule } from './bot/bot.module';
 import { AgentModule } from './agents/agent.module';
 import { AccountModule } from './account/account.module';
+import { SplitsModule } from './splits/splits.module';
+import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
   imports: [
@@ -12,9 +14,11 @@ import { AccountModule } from './account/account.module';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    PrismaModule,
     BotModule,
     AgentModule,
     AccountModule,
+    SplitsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

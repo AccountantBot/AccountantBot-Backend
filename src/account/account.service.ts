@@ -1,22 +1,10 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
 import { LinkWalletDto } from './dto/link-wallet.dto';
+import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
 export class AccountService {
-  private prisma: PrismaClient;
-
-  constructor() {
-    this.prisma = new PrismaClient();
-  }
-
-  async onModuleInit() {
-    await this.prisma.$connect();
-  }
-
-  async onModuleDestroy() {
-    await this.prisma.$disconnect();
-  }
+  constructor(private readonly prisma: PrismaService) {}
 
   async linkWallet(linkWalletDto: LinkWalletDto) {
     const { telegram, pubkey } = linkWalletDto;
