@@ -55,14 +55,14 @@ export class AgentService {
               },
               splitType: {
                 type: 'string',
-                enum: ['equal', 'custom'],
+                enum: ['equal'],
                 description:
-                  'Whether to split equally or use custom amounts per person',
+                  'Its ever "equal" since only equal split is supported now',
               },
               customAmounts: {
                 type: 'object',
                 description:
-                  'Map of participant names to their custom amounts (only if splitType is custom)',
+                  'Map of participant names to their custom amounts. REQUIRED when splitType is "custom". Each person gets their specified amount.',
                 additionalProperties: { type: 'number' },
               },
             },
@@ -73,12 +73,15 @@ export class AgentService {
 
       const systemPrompt = `Você é um assistente financeiro de um bot de Telegram. Sua função é analisar mensagens 
           de um grupo e identificar pedidos de divisão de conta.
-          - Se a mensagem for um pedido de divisão de conta, chame a ferramenta 'iniciar_divisao_conta'.
-          - Se a mensagem for uma conversa normal (ex: 'bom dia', 'obrigado'), não faça nada 
-            e apenas responda 'null' ou uma resposta curta e casual.
-          ${groupMembers ? `Available group members: ${groupMembers.join(', ')}` : ''}
+          
+          IMPORTANTE:
+          - Se splitType for "equal", você DEVE calcular e preencher o campo "amountPerPerson" dividindo o valor total pelo número de participantes
+          - Se splitType for "custom", você DEVE preencher o campo "customAmounts" com os valores específicos de cada pessoa mencionados na mensagem
+          - Se a mensagem for uma conversa normal (ex: 'bom dia', 'obrigado'), não chame nenhuma função
+          
+          ${groupMembers ? `Membros do grupo disponíveis: ${groupMembers.join(', ')}` : ''}
 
-        If the message is not about payments or splitting bills, do not call any function.`;
+          Se a mensagem não for sobre pagamentos ou divisão de contas, não chame nenhuma função.`;
 
       const response = await this.openai.chat.completions.create({
         model: 'gpt-5-nano',
@@ -140,12 +143,16 @@ export class AgentService {
   generateTransactionSummaryWithData(
     transaction: TransactionRequest,
   ): string {
-    return `Você deseja dividir a despesa:
-      ${transaction.description} 
-      de: R$ ${transaction.amount}; 
-      entre ${transaction.participants.join(", ")} 
-      do tipo: ${transaction.splitType == "equal" ? "Igualmente" : "Customizado"}
-      ${transaction.customAmounts ? `divisão: ${JSON.stringify(transaction.customAmounts)}` : ''}`;
+    
+    let summary = `> *Você concorda?*\n`;
+    summary += `💰 *Resumo da Divisão*\n\n`;
+    summary += `📝 Descrição: ${transaction.description || 'Despesa'}\n`;
+    summary += `💵 Valor Total: R$ ${transaction.amount.toFixed(2)}\n`;
+    summary += `👥 Participantes: ${transaction.participants.join(', ')}\n`;
+    summary += `📊 Igualmente\n`;
+    summary += `Cada pessoa paga: R$ ${(transaction.amount / transaction.participants.length).toFixed(2)}\n`;
+
+    return summary;
   }
 
   /**
