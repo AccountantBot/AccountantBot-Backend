@@ -119,7 +119,6 @@ export class AccountService {
 
     // remove @ if present
     telegramHandles = telegramHandles.map(handle => handle.startsWith('@') ? handle.slice(1) : handle);
-    console.log('Handles processados:', telegramHandles);
 
     // Busca usuários pelos telegram handles
     const users = await this.prisma.user.findMany({
@@ -134,8 +133,6 @@ export class AccountService {
       },
     });
 
-    console.log('Usuários encontrados:', users);
-
     // Mapeia os resultados para retornar também os handles que não foram encontrados
     return telegramHandles.map(handle => {
       const user = users.find(u => u.telegramHandle === handle);
@@ -144,5 +141,55 @@ export class AccountService {
         pubkey: user ? user.walletAddress : null,
       };
     });
+  }
+
+  async createTransactionHistory(transactionData: {
+    payer: string;
+    token: string;
+    totalAmount: string;
+    participants: { pubkey: string; amount: string }[];
+    chainId?: number;
+    contract?: string;
+    deadline?: Date;
+  }) {
+    try {
+      // Busca ou cria o usuário do payer
+      let payerUser = await this.prisma.user.findUnique({
+        where: { walletAddress: transactionData.payer },
+      });
+
+      console.log(transactionData)
+
+      // Cria o split no banco de dados
+      const split = await this.prisma.split.create({
+        data: {
+          payer: transactionData.payer,
+          token: transactionData.token,
+          totalAmount: transactionData.totalAmount,
+          chainId: transactionData.chainId || 1, // Default para Ethereum mainnet
+          contract: transactionData.contract || '0x0000000000000000000000000000000000000000',
+          deadline: transactionData.deadline,
+          settled: false,
+          createdById: payerUser?.id,
+          participants: {
+            create: transactionData.participants.map(p => ({
+              participant: p.pubkey,
+              amount: p.amount,
+            })),
+          },
+        },
+        include: {
+          participants: true,
+        },
+      });
+
+      return {
+        success: true,
+        split,
+      };
+    } catch (error) {
+      console.error('Erro ao criar histórico de transação:', error);
+      throw error;
+    }
   }
 }
