@@ -1,0 +1,131 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------
+// Enums
+// ------------------------------------------------------
+
+enum SignatureStatus {
+  PENDING      // recebida, sem validação on-chain
+  VALID        // verificada (digest, signer == participant)
+  USED_ONCHAIN // já usada no settleSplit
+  EXPIRED      // deadline expirado
+  REJECTED     // inválida (hash/valor inválido ou signer != participant)
+}
+
+// ------------------------------------------------------
+// Models
+// ------------------------------------------------------
+
+// Autenticação via SIWE (Sign-In With Ethereum)
+model User {
+  id             String   @id @default(uuid())
+  walletAddress  String   @unique // 0x... (checksum opcional)
+  createdAt      DateTime @default(now())
+
+  // SIWE (opcional: guarda último nonce e sessão ativa)
+  siweNonce      String?  @db.VarChar(128)
+  sessionToken   String?  @unique
+  sessionExpires DateTime?
+
+  splitsCreated  Split[]  @relation("SplitsCreatedBy")
+}
+
+// Um Split on-chain (espelha SplitCoordinator.splits[splitId])
+model Split {
+  id            Int       @id @default(autoincrement()) // id interno (não precisa ser o splitId on-chain)
+  chainId       Int
+  contract      String    // endereço do SplitCoordinator na rede
+  splitIdOnchain BigInt?  // opcional: id do split retornado pelo contrato (se você "espelhar" na criação)
+  payer         String    // address
+  token         String    // ERC-20 address
+  totalAmount   Decimal   @db.Decimal(78,0)
+  deadline      DateTime? // 0/NULL = sem expiração
+  metaHash      Bytes?    // keccak256 (32 bytes)
+  settled       Boolean   @default(false)
+
+  createdById   String?
+  createdBy     User?     @relation("SplitsCreatedBy", fields: [createdById], references: [id])
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  participants  SplitParticipant[]
+  signatures    SplitSignature[]
+
+  @@index([chainId, contract])
+  @@index([payer])
+  @@index([token])
+  @@index([settled, createdAt])
+}
+
+// Participantes e valores devidos (espelha legs[])
+model SplitParticipant {
+  id         Int      @id @default(autoincrement())
+  splitId    Int
+  split      Split    @relation(fields: [splitId], references: [id], onDelete: Cascade)
+
+  participant String  // address
+  amount      Decimal @db.Decimal(78,0)
+
+  // marcações úteis para UX
+  approvedOffchainAt DateTime? // quando a assinatura válida chegou
+  usedOnchainAt      DateTime? // quando entrou no settleSplit
+
+  @@unique([splitId, participant])  // um registro por participante em cada split
+  @@index([participant])
+}
+
+// Assinaturas EIP-712 recebidas (approve do participante)
+model SplitSignature {
+  id          Int             @id @default(autoincrement())
+  splitId     Int
+  split       Split           @relation(fields: [splitId], references: [id], onDelete: Cascade)
+
+  participant String          // signer esperado
+  amount      Decimal         @db.Decimal(78,0) // deve bater com SplitParticipant.amount
+  deadline    DateTime?
+  salt        Bytes           // bytes32
+  signature   Bytes           // 65 bytes (r||s||v) ou v,r,s serializados
+
+  status      SignatureStatus @default(PENDING)
+  reason      String?         // motivo do REJECTED/EXPIRED, etc.
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  // Garante unicidade por participante+sinalização (evita replays no banco)
+  @@unique([splitId, participant, salt])
+  @@index([participant])
+  @@index([status, createdAt])
+}
+
+// Lista de tokens suportados pela sua app (UI/validação)
+model SupportedToken {
+  id        Int      @id @default(autoincrement())
+  chainId   Int
+  address   String   // token address
+  symbol    String
+  name      String?
+  decimals  Int      // ex.: 6 para USDC
+  enabled   Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([chainId, address])
+  @@index([enabled])
+}
