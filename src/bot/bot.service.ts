@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import TelegramBot from 'node-telegram-bot-api';
 import { AgentService } from 'src/agents/agent.service';
 import { RedisService } from 'src/redis/redis.service';
+import { AccountService } from 'src/account/account.service';
 
 @Injectable()
 export class BotService implements OnModuleInit {
@@ -15,6 +16,7 @@ export class BotService implements OnModuleInit {
     @Inject("BOT_TOKEN") private readonly BOT_TOKEN: string,
     @Inject() private readonly agentService: AgentService,
     @Inject() private readonly redisService: RedisService,
+    @Inject() private readonly accountService: AccountService,
   ) {}
 
   async onModuleInit() {
@@ -123,13 +125,15 @@ export class BotService implements OnModuleInit {
           return;
         }
 
+        this.logger.log(`Aprovando transação armazenada: ${JSON.stringify(transactionData)}`);
+
         this.logger.log(`Aprovando transação a partir da chave ${key}`);
         // Chama a função responsável por enviar o dinheiro (não implementar aqui)
         await this.sendMessage(chatId, '✅ Transação aprovada. Iniciando processo de envio...');
         await this.sendMoney();
 
         // Remove a transação do cache após aprovação
-        await this.redisService.delete(key);
+        // await this.redisService.delete(key);
         await this.sendMessage(chatId, '✅ Transação processada e removida do cache.');
       } catch (error) {
         this.logger.error(`Erro ao processar comando /sim no chat ${chatId}`, error);
@@ -297,6 +301,12 @@ export class BotService implements OnModuleInit {
               this.logger.log(`Transação detectada: ${JSON.stringify(transaction)}`);
               
               try {
+                // Busca as pubkeys dos participantes da transação
+                const participantHandles = transaction.participants || [];
+                const pubkeysData = await this.accountService.getPubkeysByTelegramHandles(participantHandles);
+                
+                this.logger.log(`Pubkeys obtidas: ${JSON.stringify(pubkeysData)}`);
+
                 // Salva os dados da transação no Redis com TTL de 5 minutos
                 const requesterId = msg.from?.id || 0;
                 const transactionKey = `transaction:${chatId}:${Date.now()}`;
@@ -305,6 +315,7 @@ export class BotService implements OnModuleInit {
                   chatId: chatId,
                   requester: requesterId,
                   transaction: transaction,
+                  pubkeys: pubkeysData,
                   createdAt: new Date().toISOString(),
                 };
 

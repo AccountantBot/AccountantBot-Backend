@@ -4,9 +4,10 @@ import { BotService } from './bot.service';
 import { BotController } from './bot.controller';
 import { AgentModule } from 'src/agents/agent.module';
 import { RedisModule } from 'src/redis/redis.module';
+import { AccountModule } from 'src/account/account.module';
 
 @Module({
-  imports: [ConfigModule, AgentModule, RedisModule],
+  imports: [ConfigModule, AgentModule, RedisModule, AccountModule],
   providers: [
     BotService,
     {

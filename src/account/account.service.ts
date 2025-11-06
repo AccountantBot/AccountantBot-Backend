@@ -123,4 +123,38 @@ export class AccountService {
       total: splitsAsPayer.length + splitsAsParticipant.length,
     };
   }
+
+  async getPubkeysByTelegramHandles(telegramHandles: string[]): Promise<{ telegramHandle: string; pubkey: string | null }[]> {
+    if (!telegramHandles || telegramHandles.length === 0) {
+      return [];
+    }
+
+    // remove @ if present
+    telegramHandles = telegramHandles.map(handle => handle.startsWith('@') ? handle.slice(1) : handle);
+    console.log('Handles processados:', telegramHandles);
+
+    // Busca usuários pelos telegram handles
+    const users = await this.prisma.user.findMany({
+      where: {
+        telegramHandle: {
+          in: telegramHandles,
+        },
+      },
+      select: {
+        telegramHandle: true,
+        walletAddress: true,
+      },
+    });
+
+    console.log('Usuários encontrados:', users);
+
+    // Mapeia os resultados para retornar também os handles que não foram encontrados
+    return telegramHandles.map(handle => {
+      const user = users.find(u => u.telegramHandle === handle);
+      return {
+        telegramHandle: handle,
+        pubkey: user ? user.walletAddress : null,
+      };
+    });
+  }
 }
